@@ -1,0 +1,186 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+"""Fetch the USGS all-month earthquake feed and save it exactly as received."""
+
+from pathlib import Path
+
+import requests
+
+URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson"
+OUT = Path("data/earthquakes_all_month.geojson")
+
+
+def main() -> None:
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    response = requests.get(URL, timeout=60)
+    response.raise_for_status()
+    OUT.write_bytes(response.content)
+    print(f"Saved {len(response.content)} bytes to {OUT}")
+
+
+if __name__ == "__main__":
+    main()
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["matplotlib"]
+# ///
+"""Read the cached USGS earthquake GeoJSON and draw a world map."""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+
+DATA = Path("data/earthquakes_all_month.geojson")
+OUT = Path("out/earthquakes.png")
+
+
+def load_quakes(path: Path) -> list[dict]:
+    """Turn GeoJSON features into a list of simple dictionaries."""
+    with path.open(encoding="utf-8") as file:
+        data = json.load(file)
+
+    quakes = []
+    for feature in data["features"]:
+        geometry = feature.get("geometry")
+        properties = feature.get("properties", {})
+
+        if not geometry or not geometry.get("coordinates"):
+            continue
+
+        lon, lat, depth = geometry["coordinates"][:3]
+        magnitude = properties.get("mag")
+        time_ms = properties.get("time")
+
+        if magnitude is None or time_ms is None:
+            continue
+
+        quakes.append(
+            {
+                "lon": lon,
+                "lat": lat,
+                "depth": depth,
+                "mag": magnitude,
+                "time": datetime.fromtimestamp(time_ms / 1000, tz=timezone.utc),
+                "place": properties.get("place", ""),
+            }
+        )
+
+    return quakes
+
+
+def draw_map(quakes: list[dict]) -> None:
+    """Draw longitude/latitude, size by magnitude, colour by depth."""
+    fig, ax = plt.subplots(figsize=(14, 7))
+
+    lons = [q["lon"] for q in quakes]
+    lats = [q["lat"] for q in quakes]
+    mags = [q["mag"] for q in quakes]
+    depths = [q["depth"] for q in quakes]
+
+    # Make small quakes visible; larger quakes dominate.
+    sizes = [max(2, (m + 1) ** 4) for m in mags]
+
+    norm = Normalize(vmin=min(depths), vmax=max(depths))
+
+    scatter = ax.scatter(
+        lons,
+        lats,
+        s=sizes,
+        c=depths,
+        cmap="viridis_r",
+        alpha=0.65,
+        norm=norm,
+        edgecolors="none",
+    )
+
+    ax.set_title("Earthquakes in the last 30 days: location, magnitude (size), depth (colour)")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_xlim(-180, 180)
+    ax.set_ylim(-90, 90)
+    ax.grid(True, linewidth=0.3, alpha=0.4)
+
+    colour_bar = fig.colorbar(scatter, ax=ax, pad=0.01)
+    colour_bar.set_label("Depth (km)")
+
+    fig.tight_layout()
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(OUT, dpi=200)
+    print(f"Wrote {OUT}")
+
+
+def main() -> None:
+    quakes = load_quakes(DATA)
+    print(f"Loaded {len(quakes)} earthquakes")
+    draw_map(quakes)
+
+
+if __name__ == "__main__":
+    main()
+# Earthquakes this month
+
+Earthquakes are a natural phenomenon: the ground moves whether or not anyone is watching. I looked at the last 30 days of global earthquakes because the data is open, global, and updated continuously.
+
+## Source
+
+The numbers come from the United States Geological Survey (USGS) earthquake feed:
+
+<https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson>
+
+The file is a GeoJSON `FeatureCollection`. Each feature is one earthquake. Its properties include magnitude (`mag`), place (`place`), and time (`time`); its geometry is a point with longitude, latitude, and depth in kilometres. The file contains thousands of rows depending on the month.
+
+## Picture
+
+![Map of earthquakes in the last 30 days](out/earthquakes.png)
+
+The picture plots every earthquake in the feed by longitude and latitude. The size of each dot is magnitude, and the colour is depth: darker blue is shallower, yellow is deeper. It shows where the last month’s earthquakes happened and roughly how big and deep they were.
+
+What it hides: it does not show exact timing, tectonic plate boundaries, or energy released. Size is magnitude, not damage. Colour is depth, not a third spatial axis. The map is a simple longitude/latitude projection, so polar regions are stretched.
+
+## How to run
+
+```bash
+uv run fetch.py && uv run plot.py
+## `PROCESS.md`
+
+```markdown
+# Process
+
+## Tools used
+
+I used an AI assistant to draft the first version of `fetch.py` and `plot.py`, and to suggest the overall structure. I then ran the scripts, read the output, and corrected the parts that did not match the actual USGS data.
+
+## One thing I kept
+
+I kept the colour-by-depth idea. The AI suggested using a `Normalize` object so that the full depth range maps onto the colour scale. That was a good suggestion because earthquake depths vary a lot, and a fixed colour scale would either wash out shallow quakes or hide deep ones. It also keeps the plotting code short.
+
+## One thing I rejected
+
+The AI first suggested using pandas to load and filter the GeoJSON. I rejected that. The GeoJSON is already a simple nested list of dictionaries, and the standard library `json` module is enough. Using pandas would add a large dependency and hide the loop over the features, which is part of what this assignment asks me to show.
+
+## What I had to correct
+
+The AI assumed every feature would have a magnitude and coordinates. The real feed contains rows where `geometry` is `null` or `mag` is missing. I added checks that skip those rows instead of crashing. I also removed an unused time-based plot that the AI suggested, because the assignment asks for one clear message per picture and the map already carries it.
+# after creating the repo from the template
+mkdir -p data out
+uv run fetch.py
+uv run plot.py
+git add fetch.py
+git commit -m "fetch USGS earthquake feed"
+
+git add data/earthquakes_all_month.geojson
+git commit -m "cache raw earthquake data"
+
+git add plot.py
+git commit -m "first ugly earthquake plot"
+
+git add plot.py out/earthquakes.png
+git commit -m "plot earthquakes by location, magnitude, depth"
+
+git add README.md PROCESS.md
+git commit -m "document source and process"
